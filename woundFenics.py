@@ -49,7 +49,7 @@ File("wound_cylinder_mesh.pvd") << mesh
 #####################
 
 # Define elements
-U1 = VectorElement('P', 1, 3)
+U1 = VectorElement('P', tetrahedron, 3)
 P1 = FiniteElement('P', tetrahedron, 1)
 element = MixedElement([U1, P1, P1])
 # Define function space
@@ -58,7 +58,8 @@ V = FunctionSpace(mesh, element)
 # Define variational problem
 Xi = Function(V) # This is the solution function (nonlinear)
 u, rho, c = split(Xi)
-N_1, N_2, N_3 = TestFunction(V) # This is the test function
+N = TestFunction(V) # This is the test function
+N_1, N_2, N_3 = split(N)
 
 #####################
 # BOUNDARY AND INITIAL CONDITIONS
@@ -70,13 +71,17 @@ def outer_boundary(x, on_boundary):
     tol=0.2
     return on_boundary and r>outer_radius-tol
 
-bc = DirichletBC(V, Constant([("0.0", "0.0", "0.0"), rho_healthy,c_healthy]), outer_boundary)
+bc1 = DirichletBC(V.sub(0).sub(0), Constant(0.), outer_boundary)
+bc2 = DirichletBC(V.sub(0).sub(1), Constant(0.), outer_boundary)
+bc3 = DirichletBC(V.sub(0).sub(2), Constant(0.), outer_boundary)
+bc4 = DirichletBC(V.sub(1), Constant(rho_healthy), outer_boundary)
+bc5 = DirichletBC(V.sub(2), Constant(c_healthy), outer_boundary)
 
-# Define initial value
-density_0 = Expression(('(pow(x[0],2) + pow(x[1],2) > pow(inner_radius,2)) ? rho_healthy : rho_wound','(pow(x[0],2) + pow(x[1],2) > pow(inner_radius,2)) ? c_healthy : c_wound'),
+# Define initial values for displacement, cells, and cytokine
+ic = Expression(((0,0,0),'(pow(x[0],2) + pow(x[1],2) > pow(inner_radius,2)) ? rho_healthy : rho_wound','(pow(x[0],2) + pow(x[1],2) > pow(inner_radius,2)) ? c_healthy : c_wound'),
                 degree=1,inner_radius=inner_radius, rho_healthy=rho_healthy, rho_wound=rho_wound, c_healthy=c_healthy, c_wound=c_wound)
-density_n = interpolate(density_0, V)
-rho_n, c_n = split(density_n)
+all_n = interpolate(ic, V)
+u_n, rho_n, c_n = split(all_n)
 
 #####################
 # KINEMATICS
