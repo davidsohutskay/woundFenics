@@ -13,6 +13,10 @@ import time
 import math
 from mshr import *
 
+#####################
+# DEFINE VARIABLES
+#####################
+
 T = 336.0              # final time
 num_steps = 336      # number of time steps
 dt = T / num_steps   # time step size
@@ -28,6 +32,10 @@ rho_wound = 0
 c_healthy = 0
 c_wound = 1
 
+#####################
+# SET UP GEOMETRY
+#####################
+
 # Making a cylindrical geometry
 cylinder = Cylinder(Point(0, 0, height), Point(0, 0, 0), outer_radius, outer_radius)
 geometry = cylinder
@@ -35,6 +43,10 @@ geometry = cylinder
 # Generate the mesh
 mesh = generate_mesh(geometry, 40)
 File("wound_cylinder_mesh.pvd") << mesh
+
+#####################
+# SET UP ELEMENTS
+#####################
 
 # Define elements
 U1 = VectorElement('P', 1, 3)
@@ -47,6 +59,10 @@ V = FunctionSpace(mesh, element)
 Xi = Function(V) # This is the solution function (nonlinear)
 u, rho, c = split(Xi)
 N_1, N_2, N_3 = TestFunction(V) # This is the test function
+
+#####################
+# BOUNDARY AND INITIAL CONDITIONS
+#####################
 
 # Define boundary condition
 def outer_boundary(x, on_boundary):
@@ -62,20 +78,9 @@ density_0 = Expression(('(pow(x[0],2) + pow(x[1],2) > pow(inner_radius,2)) ? rho
 density_n = interpolate(density_0, V)
 rho_n, c_n = split(density_n)
 
-#class IC(UserExpression):
-#    def eval(self,values,x):
-#        r = (pow(x[0],2) + pow(x[1],2)
-#        if(r > pow(inner_radius,2)):
-#            values[0] = 1000
-#            values[1] = 0
-#        else:
-#            values[0] = 0
-#            values[1] = 1
-#    def value_shape(self):
-#        return(2,)
-#density_0 = IC(element = V.ufl_element())
-#density_n = interpolate(density_0)
-#rho_n,c_n = split(density_n)
+#####################
+# KINEMATICS
+#####################
 
 # Kinematics
 d = u.geometric_dimension()
@@ -152,6 +157,10 @@ PP_total = FF*SS_total
 # Mechanics equations
 F_u = inner(PP_total, grad(N1))*dx
 
+#####################
+# TRANSPORT
+#####################
+
 # Define expressions used in variational forms
 D_rho = Constant(D_rho)
 d_rho = Constant(d_rho)
@@ -166,6 +175,10 @@ S_c = Expression('0', degree=1)
 F_rho = rho*N_1*dx + dt*dot(grad(rho), grad(N_1))*dx - (rho_n + dt*S_rho)*N_1*dx
 F_c = c*N_2*dx + dt*dot(grad(c), grad(N_2))*dx - (c_n + dt*S_c)*N_2*dx
 
+#####################
+# ASSEMBLE
+#####################
+
 # Assemble the entire problem
 F = F_u + F_rho + F_c
 # If the problem were linear we would do:
@@ -175,6 +188,10 @@ F = F_u + F_rho + F_c
 vtkfile_u = File('woundFenics/solution_u.pvd')
 vtkfile_rho = File('woundFenics/solution_rho.pvd')
 vtkfile_c = File('woundFenics/solution_c.pvd')
+
+#####################
+# SOLVE
+#####################
 
 # Time-stepping
 # If it were linear we wound need:
