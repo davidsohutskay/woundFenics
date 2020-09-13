@@ -13,17 +13,72 @@ import time
 import math
 from mshr import *
 
+parameters["form_compiler"]["cpp_optimize"] = True
+parameters["form_compiler"]["representation"] = "uflacs"
+ffc_options = {
+    "quadrature_degree": 5,
+    "eliminate_zeros": True,
+    "precompute_basis_const": True,
+    "precompute_ip_const": True
+    # "optimize": True
+}
+
 #####################
 # DEFINE VARIABLES
 #####################
 
+# Mechanics
+kv = 0.76; # volumetric penalty for incompressibility
+k0 = 3.5e-3; # 0.0511; neo hookean for skin, used previously, in MPa
+kf = 5.39; # stiffness of collagen in MPa, from previous paper
+k2 = 1.95; # nonlinear exponential coefficient, non-dimensional
+t_rho = 5*0.005/1000; # 0.0045/rho_phys force of fibroblasts in MPa, this is per cell. so, in an average sense this is the production by the natural density See Koppenol
+t_rho_c = 5*0.05/1000; # 0.045/rho_phys force of myofibroblasts enhanced by chemical, I'm assuming normalized chemical, otherwise I'd have to add a normalizing constant
+K_t = 0.5; # Saturation of mechanical force by collagen
+K_t_c = c_max/10.; # saturation of chemical on force. this can be calculated from steady state
+vartheta_e = 2.; # physiological state of area stretch
+gamma_theta = 5.; # sensitivity of heaviside function
+b = Constant((0.0, 0.0, 0.0))  # Body force per unit volume
+
+# Transport
+D_rhorho = 0.0833; # 0.0833 diffusion of cells in [mm^2/hour], not normalized
+D_rhoc = -1.66e-12*10/c_max/c_max; # diffusion of chemotactic gradient, an order of magnitude greater than random walk [mm^2/hour], not normalized
+D_cc = 0.01208; # 0.15 diffusion of chemical TGF, not normalized. Updated from Murphy
+p_rho = 0.034/2; # in 1/hour production of fibroblasts naturally, proliferation rate, not normalized, based on data of doubling rate from commercial use
+p_rho_c = p_rho/2; # production enhanced by the chem, if the chemical is normalized, then suggest two fold,
+p_rho_theta = p_rho/2; # enhanced production by theta
+K_rho_c = c_max/10.; # saturation of cell proliferation by chemical, this one is definitely not crucial, just has to be small enough <cmax
+K_rho_rho = 10000; # saturation of cell by cell, from steady state
+d_rho = p_rho*(1-rho_phys/K_rho_rho); # percent of cells die per day, 10% in the original, now much less, determined to keep cells in dermis constant
+p_c_rho = 90e-11/rho_phys; # 90.0e-16/rho_phys production of c by cells in g/cells/h
+p_c_thetaE = 90e-10/rho_phys; # 300.0e-16/rho_phys coupling of elastic and chemical, three fold
+K_c_c = 1.; # saturation of chem by chem, from steady state
+d_c = 0.01/10; # 0.01 decay of chemical in 1/hours
+
+# Local solver parameters
+p_phi = 0.002/rho_phys; # production by fibroblasts, natural rate in percent/hour, 5% per day
+p_phi_c = p_phi; # production up-regulation, weighted by C and rho
+p_phi_theta = p_phi; # mechanosensing upregulation. no need to normalize by Hmax since Hmax = 1
+K_phi_c = 0.0001; # saturation of C effect on deposition.
+d_phi = 0.000970; # rate of degradation, in the order of the wound process, 100 percent in one year for wound, means 0.000116 effective per hour means degradation = 0.002 - 0.000116
+d_phi_rho_c = 0.5*0.000970/rho_phys/c_max; #0.000194; // degradation coupled to chemical and cell density to maintain phi equilibrium
+K_phi_rho = rho_phys*p_phi/d_phi - 1; # saturation of collagen fraction itself, from steady state
+tau_omega = 10./(K_phi_rho+1); # time constant for angular reorientation, think 100 percent in one year
+tau_kappa = 1./(K_phi_rho+1); # time constant, on the order of a year
+gamma_kappa = 5.; # exponent of the principal stretch ratio
+tau_lamdaP_a = 0.001/(K_phi_rho+1); # 1.0 time constant for direction a, on the order of a year
+tau_lamdaP_s = 0.001/(K_phi_rho+1); # 1.0 time constant for direction s, on the order of a year
+tau_lamdaP_n = 1.0/(K_phi_rho+1); # 1.0 time constant for direction s, on the order of a year
+tol_local = 1e-8; # local tolerance (also try 1e-5)
+time_step_ratio = 100; # time step ratio between local and global (explicit)
+max_iter = 100; # max local iter (implicit)
+
+# Run settings
 T = 336.0              # final time
 num_steps = 336      # number of time steps
 dt = T / num_steps   # time step size
-D_rho = 0.01         # diffusion coefficient
-d_rho = 10.0         # reaction rate
-D_c = 0.01
-d_c = 1
+
+# Geometry, boundary, initial condiitions
 height = 4
 inner_radius = 7.5
 outer_radius = 37.5
@@ -31,6 +86,12 @@ rho_healthy = 1000
 rho_wound = 0
 c_healthy = 0
 c_wound = 1
+kappa_healthy = 0.23
+kappa_wound = 0.33
+phif_healthy = 1.0
+phif_wound = 0.01
+a0_healthy = Constant(("1.0","0.0","0.0"))
+a0_wound = Constant(("1.0","0.0","0.0"))
 
 #####################
 # SET UP GEOMETRY
@@ -77,10 +138,12 @@ bc3 = DirichletBC(V.sub(0).sub(2), Constant(0.), outer_boundary)
 bc4 = DirichletBC(V.sub(1), Constant(rho_healthy), outer_boundary)
 bc5 = DirichletBC(V.sub(2), Constant(c_healthy), outer_boundary)
 
+bcs = [bc1, bc2, bc3, bc4, bc5]
+
 # Define initial values for displacement, cells, and cytokine
-ic = Expression(((0,0,0),'(pow(x[0],2) + pow(x[1],2) > pow(inner_radius,2)) ? rho_healthy : rho_wound','(pow(x[0],2) + pow(x[1],2) > pow(inner_radius,2)) ? c_healthy : c_wound'),
+ic = Expression(("0.0","0.0","0.0",'(pow(x[0],2) + pow(x[1],2) > pow(inner_radius,2)) ? rho_healthy : rho_wound','(pow(x[0],2) + pow(x[1],2) > pow(inner_radius,2)) ? c_healthy : c_wound'),
                 degree=1,inner_radius=inner_radius, rho_healthy=rho_healthy, rho_wound=rho_wound, c_healthy=c_healthy, c_wound=c_wound)
-all_n = interpolate(ic, V)
+Xi_n = interpolate(ic, V)
 u_n, rho_n, c_n = split(all_n)
 
 #####################
@@ -91,72 +154,54 @@ u_n, rho_n, c_n = split(all_n)
 d = u.geometric_dimension()
 I = Identity(d)             # Identity tensor
 FF = I + grad(u)             # Deformation gradient
-C = FF.T*FF                   # Right Cauchy-Green tensor
+CC = FF.T*FF                   # Right Cauchy-Green tensor
 
 # Invariants of deformation tensors
-Ic = tr(CC)
+I1CC = tr(CC)
+I2CC = 0.5(tr(CC)*tr(CC) - tr(CC*CC))
+I3CC = det(CC)
+
 J  = det(FF)
 
-# Elasticity parameters
-E, nu = 10.0, 0.3
-mu, lmbda = Constant(E/(2*(1 + nu))), Constant(E*nu/((1 + nu)*(1 - 2*nu)))
+# Plastic
+FFg = lamdaP_a*(a0a0) + lamdaP_s*(s0s0) + lamdaP_N*(n0n0)
+FFginv = (1./lamdaP_a)*(a0a0) + (1./lamdaP_s)*(s0s0) + (1./lamdaP_N)*(n0n0)
+
+# Elastic
+FFe = FF*FFginv
+CCe = FFe.transpose()*FFe
+CCeinv = CCe.inverse()
+
+# Collagen fibers
+A0 = kappa*Identity + (1-3.*kappa)*a0a0
+a = FF*a0
+A = kappa*FF*FF.transpose() + (1.-3.0*kappa)*a*a.transpose()
+trA = A(0,0) + A(1,1) + A(2,2)
+hat_A = A/trA
+
+# Anisotropic (quasi) invariants
+I4_a = inner(a0,CCe*a0)
+
+
+# Volumetric stress
+Psivol = 0.5*phif*pow(kv*(Je-1.),2) - 2*phif*k0*log(Je)
+dPsivoldJe = phif*kv*(Je-1.) - 2*phif*k0/Je
+SSe_vol = dPsivoldJe*Je*CCeinv/2
+SS_vol = Jp*FFginv*SSe_vol*FFginv
 
 # Stored strain energy density (compressible neo-Hookean model)
-psi = (mu/2)*(Ic - 3) - mu*ln(J) + (lmbda/2)*(ln(J))**2
-
-# Compute stress (first variation of Pi (directional derivative about u in the direction of v))
-#F = derivative(Pi, u, v)
-# Define the material
-def SSigma(u, gamma):
-    I = Identity(u.cell().d)      # Identity tensor
-    F = I + grad(u)               # Deformation gradient
-
-    # F_a = I - gamma*outer(f0, f0) # Active strain
-    F_e = F*(I + (gamma/(1 - gamma))*outer(f0, f0))
-
-    C_e = F_e.T*F_e               # Right Cauchy-Green tensor
-    B_e = F_e*F_e.T               # Left Cauchy-Green tensor
-
-    # Principle isotropic invariants
-    I1 = tr(B_e)
-    I2 = 0.5*(tr(B_e)**2 - tr(B_e*B_e))
-    I3 = det(B_e)
-
-    # Anisotropic (quasi) invariants
-    I4_f = inner(f0, C_e*f0)
-    I4_s = inner(s0, C_e*s0)
-    I8_fs = inner(f0, C_e*s0)
-
-    # Current fibre, sheet and sheet-normal directions
-    f = F*f0
-    s = F*s0
-
-    # Cauchy stress
-    return(  a*exp(b*(I1 - 3))*B_e - p*I \
-           + 2*a_f*(I4_f - 1)*exp(b_f*(I4_f - 1)**2)*outer(f, f) \
-           + 2*a_s*(I4_s - 1)*exp(b_s*(I4_s - 1)**2)*outer(s, s) \
-           + a_fs*I8_fs*exp(b_fs*I8_fs**2)*(outer(f, s) + outer(s, f)))
-
-# Second Piola Kirchoff Stress
-def SS(u, gamma):
-    I = Identity(u.cell().d)
-    FF = I + grad(u)
-    return(det(F)*inv(F)*sigma(u, gamma)*inv(F).T)
-
-# First Piola Kirchoff Stress
-def PP(u, gamma):
-    I = Identity(u.cell().d)
-    FF = I + grad(u)
-    return(det(F)*sigma(u, gamma)*inv(F).T)
+Psif = (kf/(2.*k2))*(exp(k2*pow((kappa*I1e + (1-3*kappa)*I4e - 1),2)))
+Psif1 = 2*k2*kappa*(kappa*I1e + (1-3*kappa)*I4e -1)*Psif
+Psif4 = 2*k2*(1-3*kappa)*(kappa*I1e + (1-3*kappa)*I4e -1)*Psif
+SSe_pas = phif*(k0*Identity + Psif1*Identity + Psif4*a0a0)
+SS_pas = Jp*FFginv*SSe_pas*FFginv
 
 # Active stress
-def SS_act():
-    
-    return 
-
+traction_act = (t_rho + t_rho_c*c/(K_t_c + c))*rho
+SS_act = (Jp*traction_act*phif/(trA*(K_t*K_t+phif*phif)))*A0
 
 # Total stress
-SS_total = SS_vol() + SS_pas() + SS_act()
+SS_total = SS_vol + SS_pas + SS_act
 PP_total = FF*SS_total
 
 # Mechanics equations
@@ -172,9 +217,14 @@ d_rho = Constant(d_rho)
 D_c = Constant(D_c)
 d_c = Constant(d_c)
 
+# Defome flux terms
+Q_rho = -3.0*(D_rhorho-phif*(D_rhorho-D_rhorho/10))*A0*Grad_rho/trA - 3.0*(D_rhoc-phif*(D_rhoc-D_rhoc/10))*rho*A0*Grad_c/trA
+Q_c = -3*(D_cc-phif*(D_cc-D_cc/10))*A0*Grad_c/trA
+
 # Define source terms
-S_rho = Expression('0', degree=1)
-S_c = Expression('0', degree=1)
+He = 1./(1.+exp(-gamma_theta*(Je - vartheta_e)))
+S_rho = (p_rho + p_rho_c*c/(K_rho_c+c) + p_rho_theta*He)*(1-rho/K_rho_rho)*rho - d_rho*rho
+S_c = (p_c_rho*c+ p_c_thetaE*He)*(rho/(K_c_c+c)) - d_c*c
 
 # Diffusion equation
 F_rho = rho*N_1*dx + dt*dot(grad(rho), grad(N_1))*dx - (rho_n + dt*S_rho)*N_1*dx
@@ -200,7 +250,8 @@ vtkfile_c = File('woundFenics/solution_c.pvd')
 
 # Time-stepping
 # If it were linear we wound need:
-#rho = Function(V)
+# Xi = Function(V)
+# But as it is that was already defined earlier
 t = 0
 for n in range(num_steps):
 
@@ -209,16 +260,18 @@ for n in range(num_steps):
 
     # Compute solution
     # If it were linear we would have a == L
-    solve(F == 0, density, bc)
+    solve(F == 0, density, bcs)
+# form_compiler_parameters=ffc_options)
 
     # Save to file and plot solution
-    output_rho, output_c = density.split()
+    output_u, output_rho, output_c = Xi.split()
+    vtkfile_u << (output_u, t) 
     vtkfile_rho << (output_rho, t)
     vtkfile_c << (output_c, t)
     #plot(rho)
 
     # Update previous solution
-    density_n = density
+    Xi_n = Xi
     #rho_n.assign(rho)
     #c_n.assign(c)
 
