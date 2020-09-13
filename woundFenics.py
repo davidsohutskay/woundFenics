@@ -27,6 +27,13 @@ ffc_options = {
 # DEFINE VARIABLES
 #####################
 
+rho_phys = 10000
+rho_healthy = 1000
+rho_wound = 0
+c_healthy = 0
+c_wound = 1e-4
+c_max = c_wound
+
 # Mechanics
 kv = 0.76; # volumetric penalty for incompressibility
 k0 = 3.5e-3; # 0.0511; neo hookean for skin, used previously, in MPa
@@ -82,10 +89,7 @@ dt = T / num_steps   # time step size
 height = 4
 inner_radius = 7.5
 outer_radius = 37.5
-rho_healthy = 1000
-rho_wound = 0
-c_healthy = 0
-c_wound = 1
+
 kappa_healthy = 0.23
 kappa_wound = 0.33
 phif_healthy = 1.0
@@ -144,7 +148,7 @@ bcs = [bc1, bc2, bc3, bc4, bc5]
 ic = Expression(("0.0","0.0","0.0",'(pow(x[0],2) + pow(x[1],2) > pow(inner_radius,2)) ? rho_healthy : rho_wound','(pow(x[0],2) + pow(x[1],2) > pow(inner_radius,2)) ? c_healthy : c_wound'),
                 degree=1,inner_radius=inner_radius, rho_healthy=rho_healthy, rho_wound=rho_wound, c_healthy=c_healthy, c_wound=c_wound)
 Xi_n = interpolate(ic, V)
-u_n, rho_n, c_n = split(all_n)
+u_n, rho_n, c_n = split(Xi_n)
 
 #####################
 # KINEMATICS
@@ -158,26 +162,31 @@ CC = FF.T*FF                   # Right Cauchy-Green tensor
 
 # Invariants of deformation tensors
 I1CC = tr(CC)
-I2CC = 0.5(tr(CC)*tr(CC) - tr(CC*CC))
+I2CC = 0.5*(tr(CC)*tr(CC) - tr(CC*CC))
 I3CC = det(CC)
 
 J  = det(FF)
 
 # Plastic
-FFg = lamdaP_a*(a0a0) + lamdaP_s*(s0s0) + lamdaP_N*(n0n0)
-FFginv = (1./lamdaP_a)*(a0a0) + (1./lamdaP_s)*(s0s0) + (1./lamdaP_N)*(n0n0)
+# For not just define lamdaP as 1
+#FFg = lamdaP_a*(a0a0) + lamdaP_s*(s0s0) + lamdaP_N*(n0n0)
+#FFginv = (1./lamdaP_a)*(a0a0) + (1./lamdaP_s)*(s0s0) + (1./lamdaP_N)*(n0n0)
+kappa = kappa_healthy
+FFg = Identity(d)
+FFginv = Identity(d)
+Jp = det(FFg)
 
 # Elastic
 FFe = FF*FFginv
-CCe = FFe.transpose()*FFe
-CCeinv = CCe.inverse()
+CCe = FFe.T*FFe
+CCeinv = inv(CCe)
 
 # Collagen fibers
-A0 = kappa*Identity + (1-3.*kappa)*a0a0
+a0 = a0_healthy
+A0 = kappa*I + (1-3.*kappa)*a0*a0.T
 a = FF*a0
-A = kappa*FF*FF.transpose() + (1.-3.0*kappa)*a*a.transpose()
-trA = A(0,0) + A(1,1) + A(2,2)
-hat_A = A/trA
+A = kappa*FF*FF.T + (1.-3.0*kappa)*a*a.T
+hat_A = A/tr(A)
 
 # Anisotropic (quasi) invariants
 I4_a = inner(a0,CCe*a0)
@@ -193,7 +202,7 @@ SS_vol = Jp*FFginv*SSe_vol*FFginv
 Psif = (kf/(2.*k2))*(exp(k2*pow((kappa*I1e + (1-3*kappa)*I4e - 1),2)))
 Psif1 = 2*k2*kappa*(kappa*I1e + (1-3*kappa)*I4e -1)*Psif
 Psif4 = 2*k2*(1-3*kappa)*(kappa*I1e + (1-3*kappa)*I4e -1)*Psif
-SSe_pas = phif*(k0*Identity + Psif1*Identity + Psif4*a0a0)
+SSe_pas = phif*(k0*I + Psif1*I + Psif4*a0a0)
 SS_pas = Jp*FFginv*SSe_pas*FFginv
 
 # Active stress
@@ -205,7 +214,7 @@ SS_total = SS_vol + SS_pas + SS_act
 PP_total = FF*SS_total
 
 # Mechanics equations
-F_u = inner(PP_total, grad(N1))*dx
+F_u = inner(PP_total, grad(N1))*dx - dot(b,N1)*dx
 
 #####################
 # TRANSPORT
