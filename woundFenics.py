@@ -90,10 +90,10 @@ height = 4
 inner_radius = 7.5
 outer_radius = 37.5
 
-kappa_healthy = 0.23
-kappa_wound = 0.33
-phif_healthy = 1.0
-phif_wound = 0.01
+kappa_healthy = Constant(0.23)
+kappa_wound = Constant(0.33)
+phif_healthy = Constant(1.0)
+phif_wound = Constant(0.01)
 a0_healthy = Constant(("1.0","0.0","0.0"))
 a0_wound = Constant(("1.0","0.0","0.0"))
 
@@ -161,74 +161,82 @@ FF = I + grad(u)             # Deformation gradient
 CC = FF.T*FF                   # Right Cauchy-Green tensor
 
 # Invariants of deformation tensors
-I1CC = tr(CC)
-I2CC = 0.5*(tr(CC)*tr(CC) - tr(CC*CC))
-I3CC = det(CC)
+I1 = tr(CC)
+I2 = 0.5*(tr(CC)*tr(CC) - tr(CC*CC))
+I3 = det(CC)
 
-J  = det(FF)
+J  = variable(det(FF))
 
 # Plastic
 # For not just define lamdaP as 1
+#a0a0 = outer(a0,a0)
+#s0s0 = outer(s0,s0)
+#n0n0 = outer(n0,n0)
 #FFg = lamdaP_a*(a0a0) + lamdaP_s*(s0s0) + lamdaP_N*(n0n0)
 #FFginv = (1./lamdaP_a)*(a0a0) + (1./lamdaP_s)*(s0s0) + (1./lamdaP_N)*(n0n0)
+phif = phif_healthy
 kappa = kappa_healthy
 FFg = Identity(d)
 FFginv = Identity(d)
-Jp = det(FFg)
+Jp = variable(det(FFg))
 
 # Elastic
 FFe = FF*FFginv
 CCe = FFe.T*FFe
 CCeinv = inv(CCe)
+Je = variable(det(FFe))
 
 # Collagen fibers
 a0 = a0_healthy
-A0 = kappa*I + (1-3.*kappa)*a0*a0.T
+A0 = kappa*I + (1-3.*kappa)*outer(a0,a0)
 a = FF*a0
-A = kappa*FF*FF.T + (1.-3.0*kappa)*a*a.T
+A = kappa*FF*FF.T + (1.-3.0*kappa)*outer(a,a)
 hat_A = A/tr(A)
 
 # Anisotropic (quasi) invariants
-I4_a = inner(a0,CCe*a0)
-
+I1e = variable(tr(CCe))
+I4e = variable(inner(a0,CCe*a0))
+#print(type(I1e))
+#print(type(I4e))
 
 # Volumetric stress
-Psivol = 0.5*phif*pow(kv*(Je-1.),2) - 2*phif*k0*log(Je)
+#Psivol = 0.5*phif*kv*(Je-1)*(Je-1) - 2*phif*k0*math.log(Je)
 dPsivoldJe = phif*kv*(Je-1.) - 2*phif*k0/Je
 SSe_vol = dPsivoldJe*Je*CCeinv/2
 SS_vol = Jp*FFginv*SSe_vol*FFginv
 
 # Stored strain energy density (compressible neo-Hookean model)
+#Psif = Expression('(kf/(2.*k2))*(exp(k2*pow((kappa*I1e + (1-3*kappa)*I4e - 1),2)))', degree=2, kf = kf, k2 = k2, I1e = I1e, I4e = I4e)
 Psif = (kf/(2.*k2))*(exp(k2*pow((kappa*I1e + (1-3*kappa)*I4e - 1),2)))
 Psif1 = 2*k2*kappa*(kappa*I1e + (1-3*kappa)*I4e -1)*Psif
 Psif4 = 2*k2*(1-3*kappa)*(kappa*I1e + (1-3*kappa)*I4e -1)*Psif
-SSe_pas = phif*(k0*I + Psif1*I + Psif4*a0a0)
+SSe_pas = phif*(k0*I + Psif1*I + Psif4*outer(a0,a0))
 SS_pas = Jp*FFginv*SSe_pas*FFginv
 
 # Active stress
 traction_act = (t_rho + t_rho_c*c/(K_t_c + c))*rho
-SS_act = (Jp*traction_act*phif/(trA*(K_t*K_t+phif*phif)))*A0
+SS_act = (Jp*traction_act*phif/(tr(A)*(K_t*K_t+phif*phif)))*A0
 
 # Total stress
 SS_total = SS_vol + SS_pas + SS_act
 PP_total = FF*SS_total
 
 # Mechanics equations
-F_u = inner(PP_total, grad(N1))*dx - dot(b,N1)*dx
+F_u = inner(PP_total, grad(N_1))*dx - dot(b,N_1)*dx
 
 #####################
 # TRANSPORT
 #####################
 
 # Define expressions used in variational forms
-D_rho = Constant(D_rho)
+D_rhorho = Constant(D_rhorho)
 d_rho = Constant(d_rho)
-D_c = Constant(D_c)
+D_cc = Constant(D_cc)
 d_c = Constant(d_c)
 
-# Defome flux terms
-Q_rho = -3.0*(D_rhorho-phif*(D_rhorho-D_rhorho/10))*A0*Grad_rho/trA - 3.0*(D_rhoc-phif*(D_rhoc-D_rhoc/10))*rho*A0*Grad_c/trA
-Q_c = -3*(D_cc-phif*(D_cc-D_cc/10))*A0*Grad_c/trA
+# Define modified diffusion coefficients
+#D_rhorho_bar = -3.0*(D_rhorho-phif*(D_rhorho-D_rhorho/10))*A0*Grad_rho/tr(A) - 3.0*(D_rhoc-phif*(D_rhoc-D_rhoc/10))*rho*A0*Grad_c/tr(A)
+#D_cc_bar = -3*(D_cc-phif*(D_cc-D_cc/10))*A0/tr(A)
 
 # Define source terms
 He = 1./(1.+exp(-gamma_theta*(Je - vartheta_e)))
@@ -236,8 +244,8 @@ S_rho = (p_rho + p_rho_c*c/(K_rho_c+c) + p_rho_theta*He)*(1-rho/K_rho_rho)*rho -
 S_c = (p_c_rho*c+ p_c_thetaE*He)*(rho/(K_c_c+c)) - d_c*c
 
 # Diffusion equation
-F_rho = rho*N_1*dx + dt*dot(grad(rho), grad(N_1))*dx - (rho_n + dt*S_rho)*N_1*dx
-F_c = c*N_2*dx + dt*dot(grad(c), grad(N_2))*dx - (c_n + dt*S_c)*N_2*dx
+F_rho = rho*N_2*dx + dt*dot(D_rhorho*grad(rho), grad(N_2))*dx - (rho_n + dt*S_rho)*N_2*dx
+F_c = c*N_3*dx + dt*dot(D_cc*grad(c), grad(N_3))*dx - (c_n + dt*S_c)*N_3*dx
 
 #####################
 # ASSEMBLE
@@ -269,7 +277,7 @@ for n in range(num_steps):
 
     # Compute solution
     # If it were linear we would have a == L
-    solve(F == 0, density, bcs)
+    solve(F == 0, Xi, bcs)
 # form_compiler_parameters=ffc_options)
 
     # Save to file and plot solution
