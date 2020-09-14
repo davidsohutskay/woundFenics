@@ -16,7 +16,7 @@ from mshr import *
 parameters["form_compiler"]["cpp_optimize"] = True
 parameters["form_compiler"]["representation"] = "uflacs"
 ffc_options = {
-    "quadrature_degree": 5,
+    "quadrature_degree": 1,
     "eliminate_zeros": True,
     "precompute_basis_const": True,
     "precompute_ip_const": True
@@ -27,7 +27,7 @@ ffc_options = {
 # DEFINE VARIABLES
 #####################
 
-rho_phys = 10000
+rho_phys = 1000
 rho_healthy = 1000
 rho_wound = 0
 c_healthy = 0
@@ -82,7 +82,7 @@ max_iter = 100; # max local iter (implicit)
 
 # Run settings
 T = 336.0              # final time
-num_steps = 336      # number of time steps
+num_steps = 3360      # number of time steps
 dt = T / num_steps   # time step size
 
 # Geometry, boundary, initial condiitions
@@ -106,8 +106,8 @@ cylinder = Cylinder(Point(0, 0, height), Point(0, 0, 0), outer_radius, outer_rad
 geometry = cylinder
 
 # Generate the mesh
-mesh = generate_mesh(geometry, 40)
-File("wound_cylinder_mesh.pvd") << mesh
+mesh = generate_mesh(geometry, 20)
+File("cylinder_mesh.pvd") << mesh
 
 #####################
 # SET UP ELEMENTS
@@ -208,18 +208,18 @@ SS_vol = Jp*FFginv*SSe_vol*FFginv
 # Stored strain energy density (compressible neo-Hookean model)
 #Psif = Expression('(kf/(2.*k2))*(exp(k2*pow((kappa*I1e + (1-3*kappa)*I4e - 1),2)))', degree=2, kf = kf, k2 = k2, I1e = I1e, I4e = I4e)
 Psif = (kf/(2.*k2))*(exp(k2*pow((kappa*I1e + (1-3*kappa)*I4e - 1),2)))
-Psif1 = 2*k2*kappa*(kappa*I1e + (1-3*kappa)*I4e -1)*Psif
-Psif4 = 2*k2*(1-3*kappa)*(kappa*I1e + (1-3*kappa)*I4e -1)*Psif
-SSe_pas = phif*(k0*I + Psif1*I + Psif4*outer(a0,a0))
-SS_pas = Jp*FFginv*SSe_pas*FFginv
+#Psif1 = 2*k2*kappa*(kappa*I1e + (1-3*kappa)*I4e -1)*Psif
+#Psif4 = 2*k2*(1-3*kappa)*(kappa*I1e + (1-3*kappa)*I4e -1)*Psif
+#SSe_pas = phif*(k0*I) # + Psif1*I + Psif4*outer(a0,a0))
+#SS_pas = Jp*FFginv*SSe_pas*FFginv
 
 # Active stress
-traction_act = (t_rho + t_rho_c*c/(K_t_c + c))*rho
-SS_act = (Jp*traction_act*phif/(tr(A)*(K_t*K_t+phif*phif)))*A0
+#traction_act = (t_rho + t_rho_c*c/(K_t_c + c))*rho
+#SS_act = (Jp*traction_act*phif/(tr(A)*(K_t*K_t+phif*phif)))*A0
 
 # Total stress
-SS_total = SS_vol + SS_pas + SS_act
-PP_total = FF*SS_total
+#SS_total = SS_vol + SS_pas + SS_act
+#PP_total = FF*SS_total
 
 # Mechanics equations
 F_u = inner(PP_total, grad(N_1))*dx - dot(b,N_1)*dx
@@ -244,8 +244,8 @@ S_rho = (p_rho + p_rho_c*c/(K_rho_c+c) + p_rho_theta*He)*(1-rho/K_rho_rho)*rho -
 S_c = (p_c_rho*c+ p_c_thetaE*He)*(rho/(K_c_c+c)) - d_c*c
 
 # Diffusion equation
-F_rho = rho*N_2*dx + dt*dot(D_rhorho*grad(rho), grad(N_2))*dx - (rho_n + dt*S_rho)*N_2*dx
-F_c = c*N_3*dx + dt*dot(D_cc*grad(c), grad(N_3))*dx - (c_n + dt*S_c)*N_3*dx
+F_rho = ((rho - rho_n)/dt)*N_2*dx + D_rhorho*dot(grad(rho),grad(N_2))*dx - (S_rho*N_2)*dx
+F_c = ((c - c_n)/dt)*N_3*dx + D_cc*dot(grad(c),grad(N_3))*dx - (S_c*N_3)*dx
 
 #####################
 # ASSEMBLE
@@ -257,9 +257,9 @@ F = F_u + F_rho + F_c
 #a, L = lhs(F), rhs(F)
 
 # Create VTK file for saving solution
-vtkfile_u = File('woundFenics/solution_u.pvd')
-vtkfile_rho = File('woundFenics/solution_rho.pvd')
-vtkfile_c = File('woundFenics/solution_c.pvd')
+vtkfile_u = File('resultsWoundFenics/solution_u.pvd')
+vtkfile_rho = File('resultsWoundFenics/solution_rho.pvd')
+vtkfile_c = File('resultsWoundFenics/solution_c.pvd')
 
 #####################
 # SOLVE
@@ -277,18 +277,17 @@ for n in range(num_steps):
 
     # Compute solution
     # If it were linear we would have a == L
-    solve(F == 0, Xi, bcs)
-# form_compiler_parameters=ffc_options)
+    solve(F == 0, Xi, bcs, form_compiler_parameters=ffc_options)
 
     # Save to file and plot solution
     output_u, output_rho, output_c = Xi.split()
-    vtkfile_u << (output_u, t) 
+    vtkfile_u << (output_u, t)
     vtkfile_rho << (output_rho, t)
     vtkfile_c << (output_c, t)
     #plot(rho)
 
     # Update previous solution
-    Xi_n = Xi
+    Xi_n.assign(Xi)
     #rho_n.assign(rho)
     #c_n.assign(c)
 
